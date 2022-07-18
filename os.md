@@ -2,7 +2,7 @@
 
 * 用户线程VS内核线程：用户线程创建销毁消耗少，不需要走内核（用户态和内核态的切换），不消耗内核线程资源（内核能创建的内核线程有限），但是内核不感知用户线程，一个用户线程的阻塞会导致整个进程的阻塞（一人有难，全家牵连），而且分到的时间片也会被分给所有的用户线程（多人只分到一块蛋糕）执行时间短
 
-* dont repeat yourself
+  
 
 * User --> user cache --> page cache --> disk :一般的缓冲，非直接IO
 
@@ -93,7 +93,7 @@
 
 ### Mysql
 
-* 连接 --> 语法、词法解析 --> 优化器 --> 执行器 --> 存储引擎
+* 连接 --> 语法、词法解析 --> 预处理 --> 优化器 --> 执行器 --> 存储引擎
 
 * 预编译：mysql提前语法分析，将sql语句模板化或者说参数化
   * 优点：一次编译、多次运行，省去了解析优化等过程；此外预编译语句能防止sql注入
@@ -108,12 +108,43 @@
 
   * 依赖于redo log + binlog，利用两阶段提交确保一致性
 
-* redo log作用
+* redo log
 
   * crash safe
-  * 写数据库的时候，不用每次都刷盘，可以安心放在内存中（还是crash safe
+    * 实现了事务中的**持久性**，主要**用于掉电等故障恢复**；
+  * 写数据库的时候，不用每次都随机刷盘，可以安心放在内存中（crash safe、随机写 --> 顺序写
+  * redo log buffer
+    * redo log --> redo log buffer --> redo log file(OS) --> redo log file(Disk)
+  * redo log file
+    * 循环写
+    * 写满时MySQL 会被阻塞，会停下来将 Buffer Pool 中的脏页刷新到磁盘中，然后标记 redo log 哪些记录可以被擦除，接着对旧的 redo log 记录进行擦除，等擦除完旧记录腾出了空间，checkpoint 就会往后移动
+      * **此时的刷盘也只将redo log对应的脏页刷盘，并不理会redo log中具体的操作**
 
-* binlog格式：row（用的多，另外可以用于快速恢复）、statement
+* binlog
+
+  * 格式：row（用的多，另外可以用于快速恢复）、statement
+  * 主要**用于数据备份和主从复制**
+  * binlog --> binlog cache --> binlog file(OS) -->binlog file(disk)
+
+* redo log buffer VS binlog cache
+
+  * redo log buffer单机一份，binlog cache一个线程一份
+  * binlog需要保证事务的原子性，否则子库的主从同步只能单线程
+  * redo log只是主机使用，而且同时写redo log的事务不会产生锁竞争，单机一份是安全的
+
+* 两阶段提交
+
+  * redo （prepare disk）---->. binlog(disk) ----> redo（commit）
+  * redo和binlog通过**内部 XA 事务**关联
+  * 问题：磁盘 I/O 次数高
+  * 解决：组提交
+    * 当有多个事务提交的时候，会将多个 binlog 刷盘操作合并成一个，从而减少磁盘 I/O 的次数
+    * redo log(prepare) --> binlog(OS) --> redo log(disk) --> binlog(disk) -->redo log(commit)
+
+* undo log
+
+  * 实现了事务中的**原子性**，主要**用于事务回滚和 MVCC**
+  * 事务回滚：版本链
 
 * mysql集群架构：一主一备多从
 
@@ -134,25 +165,15 @@
 
 * Buffer pool
 
-  * mysql用户态自定义，绕过操作系统的page cache，使用直接IO
   * Free 链表、LRU 链表、Flush 链表
   * 页面淘汰算法：分young区和old区的LRU算法
+  * 自己实现buffer pool而不是直接使用mmap
+    * 一是性能，二是策略。交由操作系统来做的话，底层无法干预，这两个问题无法改善。大概可以类比于操作系统是一个通用的大货车，什么都能干，但是肯定不如定制化的跑车跑得快。
 
 * WAL：
 
   * WAL （Write-Ahead Logging）技术，指的是 MySQL 的写操作并不是立刻更新到磁盘上，而是先记录在日志上，然后在合适的时间再更新到磁盘上。
   * MySQL 的写操作从磁盘的「随机写」变成了「顺序写」
-
-* 建立联合索引时，要把**区分度大**的字段排在前面，这样区分度大的字段越有可能被更多的 SQL 使用到。
-
-* 不建索引的场景
-
-  * where条件里不用的
-  * 经常更新的字段
-
-* 即使查询过程中，没有遵循最左匹配原则，某些sql查询也会走索引扫描的
-
-  * MySQL 优化器认为直接遍历二级索引树要比遍历聚簇索引树的成本要小的多（聚簇索引树包含一些隐藏列，扫描的数据页多一些
 
 * count性能
 
@@ -160,12 +181,42 @@
 
   * count(字段):**不为 NULL 的记录有多少个**
 
-  * > InnoDB handles SELECT COUNT(`\*`) and SELECT COUNT(`1`) operations in the same way. There is no performance difference.
+    > InnoDB handles SELECT COUNT(`*`) and SELECT COUNT(`1`) operations in the same way. There is no performance difference.
+
+  * count(1)、 count(*)、 count(主键字段)在执行的时候，如果表里存在二级索引，优化器就会选择**二级索引**进行扫描。
 
   * 加速count
 
     * 模糊：show table status
     * 精确：额外维护这个计数表（框架提供能力，无侵入
+
+* 索引
+
+  * 最左匹配 -----> 索引下推
+  * 索引下推
+  * 索引覆盖
+  * 逐渐自增（插入快、防数据页的分裂
+  * 索引失效
+  * 缺点
+    * 需要占用物理空间，数量越大，占用空间越大；
+    * 创建索引和维护索引要耗费时间，这种时间随着数据量的增加而增大；
+    * 会降低表的增删改的效率，因为每次增删改索引，都需要进行动态维护
+
+  * 建立联合索引时，要把**区分度大**的字段排在前面，这样区分度大的字段越有可能被更多的 SQL 使用到。
+  * 不建索引的场景
+
+    * where条件里不用的
+    * 经常更新的字段
+  * 即使查询过程中，没有遵循最左匹配原则，某些sql查询也会走索引扫描的
+
+    * MySQL 优化器认为直接遍历二级索引树要比遍历聚簇索引树的成本要小的多（聚簇索引树包含一些隐藏列，扫描的数据页多一些
+  * 索引失效
+    * 索引左模糊匹配
+    * 对索引使用函数
+    * 对索引使用表达式计算（select * from t where a + 1 = 1)
+    * 对索引隐式类型转换：字符串 ---> 数字 
+    * 联合索引非最左匹配
+    * where中使用or
 
 * 选择B+树而不选择B树
 
@@ -198,11 +249,55 @@
 
 * innodb使用b+ tree，不使用跳表原因：https://juejin.cn/post/7106131535857713160
 
+* 意向锁
+
+  * 意向共享锁
+  * 意向排他锁
+  * 意向（共享/排他）锁之间不互斥
+  * 意向锁和表锁之间互斥
+    * 举例
+      * select ... for update(意向排他锁)
+      * Alter table ... add column...(表写锁)
+
+    * 作用：加表级锁时不需要遍历每一行来得知是否存在行级的读写锁
+
+* 插入意向锁
+
+  > An insert intention lock is a type of gap lock set by INSERT operations prior to row insertion. This lock signals the intent to insert in such a way that multiple transactions inserting into the same index gap need not wait for each other if they are not inserting at the same position within the gap. Suppose that there are index records with values of 4 and 7. Separate transactions that attempt to insert values of 5 and 6, respectively, each lock the gap between 4 and 7 with insert intention locks prior to obtaining the exclusive lock on the inserted row, but do not block each other because the rows are nonconflicting.
+
+  * `插入意向锁`是一种特殊的`间隙锁`，不是表锁 —— `间隙锁`可以锁定**开区间**内的部分记录。
+
+  * `插入意向锁`之间互不排斥，所以即使多个事务在同一区间插入多条记录，只要记录本身（`主键`、`唯一索引`）不冲突，那么事务之间就不会出现**冲突等待**。
+
+  * **插入意向锁和间隙锁是互斥的**，可能导致死锁
+
+    ```mysql
+    begin;																		begin;
+    select * from t where a>10 for update;
+    																					select * from t where a>5 for update;
+    insert into t values(12,12);							insert into t values(11,11);
+    //waiting																	//waiting
+    deadlock
+    ```
+
+    
+
+  * 作用：提升并发度
+  * 插入操作：先插入意向锁，后加上行排他锁
+
 ### Go
 
 * Type、Value和Kind
 
 * gmp：https://go.cyub.vip/gmp/gmp-model.html
+
+  * 用户态阻塞
+
+    当goroutine因为channel操作或者network I/O而阻塞时（实际上golang已经用netpoller实现了goroutine网络I/O阻塞不会导致M被阻塞，仅阻塞G），对应的G会被放置到某个wait队列(如channel的waitq)，该G的状态由_Gruning变为_Gwaitting，而M会跳过该G尝试获取并执行下一个G，如果此时没有runnable的G供M运行，那么M将解绑P，并进入sleep状态；当阻塞的G被另一端的G2唤醒时（比如channel的可读/写通知），G被标记为runnable，尝试加入G2所在P的runnext，然后再是P的Local队列和Global队列。
+
+  * 系统调用阻塞
+
+    当G被阻塞在某个系统调用上时，此时G会阻塞在_Gsyscall状态，M也处于 block on syscall 状态，此时的M可被抢占调度：执行该G的M会与P解绑，而P则尝试与其它idle的M绑定，继续执行其它G。如果没有其它idle的M，但P的Local队列中仍然有G需要执行，则创建一个新的M；当系统调用完成后，G会重新尝试获取一个idle的P进入它的Local队列恢复执行，如果没有idle的P，G会被标记为runnable加入到Global队列。
 
 * 协程
 
@@ -407,7 +502,7 @@
 * 四次挥手
 
   * 客户端打算关闭连接，此时会发送⼀个 TCP ⾸部 FIN 标志位被置为 1 的报⽂，也即 FIN 报⽂，之后客 户端进⼊ FIN_WAIT_1 状态。 
-  * 服务端收到该报⽂后，就向客户端发送 ACK 应答报⽂，接着服务端进⼊ CLOSED_WAIT 状态。 
+  * 服务端收到该报⽂后，就向客户端发送 ACK 应答报⽂，接着服务端进⼊ **CLOSED_WAIT** 状态。 
   * 客户端收到服务端的 ACK 应答报⽂后，之后进⼊ FIN_WAIT_2 状态。 
   * 等待服务端处理完数据后，也向客户端发送 FIN 报⽂，之后服务端进⼊ LAST_ACK 状态。 
   * 客户端收到服务端的 FIN 报⽂后，回⼀个 ACK 应答报⽂，之后进⼊ **TIME_WAIT** 状态 服务器收到了 ACK 应答报⽂后，就进⼊了 CLOSED 状态，⾄此服务端已经完成连接的关闭。 
@@ -469,6 +564,129 @@
 
 ### Redis
 
+* 单线程
+
+  * **「接收客户端请求->解析请求 ->进行数据读写等操作->发生数据给客户端」这个过程是由一个线程（主线程）来完成的**
+  * 日志、主从、哨兵、异步删除过期键：非主线程
+  * 高并发原因、单线程原因
+    * 大部分操作**都在内存中完成**
+    * **避免了多线程之间的竞争**
+    *  **I/O 多路复用机制**
+    * **CPU 并不是制约 Redis 性能表现的瓶颈所在**
+
+* 持久化
+
+  * AOF
+    * 写后日志
+      * **避免额外的检查开销**
+      * **数据可能会丢失**
+    * 持久化策略：always、everysec、no
+    * AOF重写
+      * 由后台子进程 bgrewriteaof 来完成的
+      * AOF重写缓冲区
+        * 解决主进程接受写操作导致与子进程 bgrewriteaof 数据不一致
+
+  * RDB
+    * 全量快照
+  * 混合持久化
+    * AOF 重写日志时，重写子进程以RDB写入，重写缓冲区里的增量命令会以 AOF 方式写入
+
+* 主从复制
+
+  * 异步
+  * 第一次RDB全量，后续通过offset增量复制
+  * replication buffer：基于长连接的命令传播，主从通信buffer
+  * repl_backlog_buffer：一个「**环形**」缓冲区，用于主从服务器断连后，从中找到差异的数据
+
+* 哨兵
+
+  * KeepAlive
+  * 主观下线，客观下线
+  * 选leader
+  * 选出新master，主从故障转移
+  * 通知客户的主节点已更换
+  * 发布者/订阅者模式
+
+* 切片集群
+
+  * 缓存量过大，单机内存无法承担
+  * 哈希槽
+
+* 脑裂
+
+  * 主节点正常运行，哨兵错误判断其下线，重新选主，使集群中出现两个master节点===> 原master节点被降级为servant节点，数据清空，接收rdb全量同步，导致数据丢失
+  * 主节点禁止写策略
+
+* 过期删除策略
+
+  * 惰性删除
+    * **不主动删除过期键，每次从数据库访问 key 时，都检测 key 是否过期，如果过期则删除该 key。**
+  * 定期删除
+    * **每隔一段时间「随机」从数据库中取出一定数量的 key 进行检查，并删除其中的过期key。**
+  * **从库对过期的处理是被动的**
+    * 从库不做过期扫描，其过期键处理依靠主服务器控制，**主库在 key 到期时，会在 AOF 文件里增加一条 del 指令，同步到所有的从库**
+    * 原因是从库不写的原则，避免主从同步混乱
+
+* 内存淘汰策略
+
+  * LRU
+    * **随机采样的方式来淘汰数据**，它是随机取 若干值，然后**淘汰最久没有使用的那个**。
+  * LFU
+
+* 缓存设计
+
+  * 缓存雪崩
+    * 大量缓存数据在同一时间过期（失效）
+    * **将缓存失效时间随机打散**
+  * 缓存击穿
+    * 某个热点数据过期
+    * 不给热点数据设置过期时间
+    * 批处理（singleflight）
+  * 缓存穿透
+    * 数据既不在缓存中，也不在数据库中
+    * 非法请求的限制
+    * 设置空值或者默认值
+    * 使用布隆过滤器快速判断
+
+* 缓存更新策略
+
+  * Cache Aside（旁路缓存）策略
+    * Redis 和 MySQL 的更新策略
+    * 应用程序直接与「数据库、缓存」交互，并负责对缓存的维护
+  * Read/Write Through（读穿 / 写穿）策略
+    * 如果缓存中数据已经存在，则更新缓存中的数据，并且由缓存组件同步更新到数据库中，然后缓存组件告知应用程序更新完成。
+  * Write Back（写回）策略
+    * 内存和磁盘
+    * Write Back（写回）策略在更新数据的时候，只更新缓存，同时将缓存数据设置为脏的，然后立马返回，并不会更新数据库。对于数据库的更新，会通过批量异步更新的方式进行。
+
+* 大key影响
+
+  * 操作阻塞主线程
+  * 内存占满，切片无效
+  * 主从延时
+  * 解决：
+    * 业务切片，高频操作再做缓存
+    * 删除：sscan批量删除、异步删除
+
+* 管道pipeline：批处理
+
+* 回滚能力：无
+
+* 分布式锁
+
+  * 第一步是，客户端获取当前时间（t1）。
+
+  * 第二步是，客户端按顺序依次向 N 个 Redis 节点执行加锁操作：
+
+  * - 加锁操作使用 SET 命令，带上 NX，EX/PX 选项，以及带上客户端的唯一标识。
+    - 如果某个 Redis 节点发生故障了，为了保证在这种情况下，Redlock 算法能够继续运行，我们需要给「加锁操作」设置一个超时时间（不是对「锁」设置超时时间，而是对「加锁操作」设置超时时间）。
+
+  * 第三步是，一旦客户端完成了和所有 Redis 节点的加锁操作，客户端就要计算整个加锁过程的总耗时（t2）。
+
+  * 缺点：**超时时间不好设置**
+
+    * 续约
+
 * 项目：直播流热度统计
   * 使用zset
     * key：streamID
@@ -492,15 +710,200 @@
 ### 缓存和数据库的一致性
 
 * 高一致性：分布式事务
-
-* 低一致性：先更新数据库再删缓存
-  * 删缓存操作可以异步（交给消息队列，超时重试）
-  * 可让缓存监听binlog（让redis把自己伪装成一个 MySQL 的从节点
-
-
+* 低一致性：
+  * 先更新数据库再删缓存
+    * 删缓存操作可以异步（交给消息队列，超时重试）
+    * redis设置过期时间（兜底
+    * 可让缓存监听binlog（让redis把自己伪装成一个 MySQL 的从节点
+  
+  * 先删缓存再更新数据库
+    * 延时双删
+  
 
 ### 线上问题排查
 
 * log文件 grep -w panic -rn ./
 * Systemctl status 服务名、journalctl -u 服务名
-* dmesg ：输出内核环形缓冲区信息。内核环形缓冲区是物理内存的一部分，用于保存内核的日志消息。它具有固定的大小，这意味着一旦缓冲区已满，较旧的日志记录将被覆盖。
+* dmesg ：输出内核环形缓冲区信息(display message)。内核环形缓冲区是物理内存的一部分，用于保存内核的日志消息。它具有固定的大小，这意味着一旦缓冲区已满，较旧的日志记录将被覆盖。
+
+### docker
+
+**容器的本质是一种特殊的进程**
+
+* 粗略过程：clone(namespace) --> mount --> exec
+  * **dockerinit** 会负责完成根目录的准备、挂载设备和目录、配置 hostname 等一系列需要在容器内进行的初始化操作。最后，它通过 execv() 系统调用，让应用进程取代自己，成为容器里的 PID=1 的进程。
+
+* Cgroups 技术是用来制造约束的主要手段
+
+* Namespace 技术则是用来修改进程视图的主要方法
+
+  * CLONE_NEWPID:让进程看不见其余进程（pid的角度隔离
+  * Mount Namespace:修改文件系统视图
+    * 挂载根目录：容器镜像
+  * 用户运行在容器里的应用进程，跟宿主机上的其他进程**一样**，都由宿主机操作系统统一管理，只不过这些被隔离的进程拥有额外设置过的 Namespace 参数
+  * 问题：共享操作系统内核
+
+* 容器：单进程模型
+
+  * 防止出现：容器是正常运行的，但是里面的应用早已经挂了的情况
+
+* AUFS（advance union file system）
+
+  容器镜像中“层”
+
+  * 只读层(read only+whiteout)
+  * init层：本地用户信息
+  * 可读写层（read write）
+  * 删除只读层里的一个文件：在可读写层创建一个 whiteout 文件，把只读层里的文件“遮挡”起来。
+  * 删除只读层里的一个文件：在可读写层创建一个一样的文件进行修改，而相同的文件上层会覆盖掉下层。
+
+* volumn
+
+  * 容器 Volume 里的信息，并不会被 docker commit 提交掉
+    * 由于启用mount namespace之后才挂载，宿主机在可读写层是看不到挂载目录的
+
+### K8S
+
+**容器编排**
+
+> 运行在大规模集群中的各种任务之间，实际上存在着各种各样的关系。这些关系的处理，才是作业编排和管理系统最困难的地方。
+
+docker --> pod --> deployment --> service, secret,job,daemonset,cronjob
+
+* Kubelet通过CRI（container runtime interface）调用容器，容器在通过OCI（底层规范）和宿主机os交互
+
+* Kubernetes 项目中，推崇的使用方法是：
+
+  * 首先，通过一个“编排对象”，比如 Pod、Job、CronJob 等，来描述你试图管理的应用；
+
+  * 然后，再为它定义一些“服务对象”，比如 Service、Secret、Horizontal Pod Autoscaler（自动水平扩展器）等。这些对象，会负责具体的平台级功能。
+
+* 容器的“单进程模型”，并不是指容器里只能运行“一个”进程，而是指容器没有管理多个进程的能力。
+
+* Pod 是 Kubernetes 里的原子调度单位
+
+  * docker实例和pod的关系类比于进程和进程组的关系
+  * Pod 里的所有容器，共享的是同一个 Network Namespace，并且可以声明共享同一个 Volume
+  * 在Pod 中，Infra 容器是第一个被创建的容器，而其他用户定义的容器，则通过 **Join Network Namespace** 的方式，与 Infra 容器关联在一起
+
+* pod和container属性区别
+
+  * 凡是跟容器的 Linux Namespace 相关的属性，一定是 Pod 级别的
+  * 凡是调度、网络、存储，以及安全相关的属性，基本上是 Pod 级别的
+
+* Pod 对象在 Kubernetes 中的生命周期（status，condition
+
+  * pending
+  * running：它包含的容器都已经创建成功，并且至少有一个正在运行中
+    * **Running** health prober 通过
+    * **Ready** readiness prober 通过：决定的这个 Pod 是不是能被通过 Service 的方式访问到，不影响Pod生命周期
+  * succeeded：正常退出
+  * failed：Pod 里所有容器以不正常的状态（非 0 的返回码）退出
+  * unkonwn
+
+* Secret
+
+  * 是帮你把 Pod 想要访问的加密数据，存放到 **Etcd** 中。然后，你就可以通过在 Pod 的容器里挂载 Volume 的方式，访问到这些 Secret 里保存的信息了。
+
+* pod的恢复策略:restartPolicy=always/onFailure/never
+
+* 控制器模式
+
+  * control loop完成调谐（Reconcile）
+
+  * 这些控制循环最后的执行结果，要么就是创建、更新一些 Pod（或者其他的 API 对象、资源），要么就是删除一些已经存在的 Pod（或者其他的 API 对象、资源）
+  * Deployment -- > ReplicaSet --> Pod
+
+  ```go
+  for {
+    实际状态 := 获取集群中对象X的实际状态（Actual State）
+    期望状态 := 获取集群中对象X的期望状态（Desired State）
+    if 实际状态 == 期望状态{
+      什么都不做
+    } else {
+      执行编排动作，将实际状态调整为期望状态
+    }
+  }
+  ```
+
+* 水平伸缩
+
+  * RollingUpdateStrategy
+
+* StatefulSet：有状态应用
+
+  * 拓扑状态（依赖 headless service
+    * headless service保证了pod的可解析身份，将 Pod 的拓扑状态（比如：哪个节点先启动，哪个节点后启动），按照 Pod 的“名字 + 编号”的方式固定下来
+  * 存储状态（依赖PV/PVC
+    * PVC（Persistent Volume Claim）
+    * PV（Persistent Volume）
+    * 把一个 Pod，比如 web-0，删除之后，这个 Pod 对应的 PVC 和 PV，并不会被删除，而这个 Volume 里已经写入的数据，也依然会保存在远程存储服务里
+    * 在这个新的 web-0 Pod 被创建出来之后，Kubernetes 为它查找名叫 www-web-0 的 PVC 时，就会直接找到旧 Pod 遗留下来的同名的 PVC，进而找到跟这个 PVC 绑定在一起的 PV。
+  * StatefulSet直接管理pod（区别于deployment管理replicaSet）
+
+* Service
+
+  * Normal Service: 以 Service 的 VIP（Virtual IP，即：虚拟 IP）方式访问
+    * DNS---->Service的IP
+  * Headless Service: 以 Service 的 DNS 方式访问
+    * DNS---->某个Pod的IP
+
+* DaemonSet
+
+  * 这个 Pod 运行在 Kubernetes 集群里的每一个节点（Node）上；
+  * 每个节点上只有一个这样的 Pod 实例；
+
+* 声明式API
+
+  * 首先，所谓“声明式”，指的就是我只需要提交一个定义好的 API 对象来“声明”，我所期望的状态是什么样子。
+  * 其次，“声明式 API”允许有多个 API 写端，以 PATCH 的方式对 API 对象进行修改，而无需关心本地原始 YAML 文件的内容。
+
+
+
+
+
+### 项目
+
+```
+Driver{
+	NewQuerier() Querier //模仿连接
+}
+Querier interface{
+	BatchQuery()
+	TotalCount()
+}
+```
+
+
+
+### 数据结构
+
+* 滑动窗口
+
+  ```go
+  func minSubArrayLen(target int, nums []int) int {
+      cur := 0
+      res := len(nums) + 1
+      left := 0
+      n := len(nums)
+      for right := 0;right< n;right++{
+          // 右操作
+          for left<=right&&//判断{
+              //左操作
+            	//判断
+          }
+        	//判断
+      }
+      return res
+  }
+  ```
+
+* alice、bob
+
+  > 对于两个玩家、分先后手、博弈类型的题目，一般可以使用动态规划来解决。
+
+  定义**状态**
+
+  * 从后往前
+  * 从前往后
+
