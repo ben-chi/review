@@ -515,6 +515,42 @@
 
 * TCP保活机制
 
+* TCP 和 UDP 可以同时绑定相同的端口吗？
+
+  * 可以，传输层有两个传输协议分别是 TCP 和 UDP，**在内核中是两个完全独立的软件模块**
+
+  ![64f2c098c17e80cb4d8de55c67c8cfb3](64f2c098c17e80cb4d8de55c67c8cfb3.jpg)
+
+* 多个 TCP 服务进程可以绑定同一个端口吗？
+
+  * 如果两个 TCP 服务进程同时绑定的 IP 地址和端口都相同，那么执行 bind() 时候就会出错，错误是“Address already in use”。
+
+  *  0.0.0.0  地址，相当于把主机上的所有 IP 地址都绑定了
+
+* 重启 TCP 服务进程时，为什么会有“Address in use”的报错信息？
+
+  * 主动发起挥手方进入TIME_WAIT阶段，时长为2MSL
+  * 当 TCP 服务进程重启时，服务端会出现 TIME_WAIT 状态的连接，TIME_WAIT 状态的连接使用的 IP+PORT 仍然被认为是一个有效的 IP+PORT 组合，相同机器上不能够在该 IP+PORT 组合上进行绑定，那么执行 bind() 函数的时候，就会返回了 Address already in use 的错误。
+  * 解决：SO_REUSEADDR
+  * 如果当前启动进程绑定的 IP+PORT 与处于TIME_WAIT 状态的连接占用的 IP+PORT 存在冲突，但是新启动的进程使用了 SO_REUSEADDR 选项，那么该进程就可以绑定成功
+
+* 客户端的端口号可以重用吗？
+
+  * TCP 连接是由四元组（源IP地址，源端口，目的IP地址，目的端口）唯一确认的，那么只要四元组中其中一个元素发生了变化，那么就表示不同的 TCP 连接的。所以如果客户端已使用端口 64992 与服务端 A 建立了连接，那么客户端要与服务端 B 建立连接，还是可以使用端口 64992 的，因为内核是通过四元祖信息来定位一个 TCP 连接的，并不会因为客户端的端口号相同，而导致连接冲突的问题
+
+* 客户端 TCP 连接 TIME_WAIT 状态过多，会导致端口资源耗尽而无法建立新的连接吗？
+
+  * TCP连接由四元组确定
+
+  * 如果客户端都是与同一个服务器（目标地址和目标端口一样）建立连接，那么如果客户端 TIME_WAIT 状态的连接过多，当端口资源被耗尽，就无法与这个服务器再建立连接了。但是，**因为只要客户端连接的服务器不同，端口资源可以重复使用的**。
+
+* 如何解决客户端 TCP 连接 TIME_WAIT 过多，导致无法与同一个服务器建立连接的问题？
+
+  * 打开 `net.ipv4.tcp_tw_reuse` 这个内核参数。
+
+  * 开启了这个内核参数后，客户端调用 connect  函数时，如果选择到的端口，已经被相同四元组的连接占用的时候，就会判断该连接是否处于  TIME_WAIT 状态，如果该连接处于 TIME_WAIT 状态并且 TIME_WAIT 状态持续的时间超过了 1 秒，那么就会重用这个连接，然后就可以正常使用该端口了。
+
+
 #### IP
 
 * 源IP地址和⽬标IP地址在传输过程中是不会变化的，只有源 MAC 地址和⽬标 MAC ⼀直在变化
@@ -566,18 +602,116 @@
 
 * 数据结构  https://time.geekbang.org/column/intro/100084301
 
-  * Zset
-    * 如果有序集合的元素个数小于 `128` 个，并且每个元素的值小于 `64` 字节时，Redis 会使用**压缩列表**作为 Zset 类型的底层数据结构；
+  * redisObject
+  
+  ```c
+  typedef struct redisObject {
+      unsigned type:4; //redisObject的数据类型，4个bits
+      unsigned encoding:4; //redisObject的编码类型，4个bits
+      unsigned lru:LRU_BITS;  //redisObject的LRU时间，LRU_BITS为24个bits
+      int refcount; //redisObject的引用计数，4个字节
+      void *ptr; //指向值的指针，8个字节
+  } robj;
+  
+  // type：面向用户的数据类型（String/List/Hash/Set/ZSet等）
+  // encoding：每一种数据类型，可以对应不同的底层数据结构来实现（SDS/ziplist/intset/hashtable/skiplist等）
+  ```
+  
+  
+  
+  * zskiplist
+  
+    ```c
+    typedef struct zset {
+        dict *dict;
+        zskiplist *zsl;
+    } zset;
+    
+    typedef struct zskiplist {
+        struct zskiplistNode *header, *tail;
+        unsigned long length;
+        int level;
+    } zskiplist;
+    
+    typedef struct zskiplistNode {
+        sds ele;
+        double score;
+        struct zskiplistNode *backward; // 方便反序遍历
+        struct zskiplistLevel {
+            struct zskiplistNode *forward;
+            unsigned long span;
+        } level[];
+    } zskiplistNode;
+    ```
+  
+    * 跳表在创建结点时，随机生成每个结点的层数
     * 如果有序集合的元素不满足上面的条件，Redis 会使用**跳表**作为 Zset 类型的底层数据结构；
-    * 在 Redis 7.0 中，压缩列表数据结构已经废弃了，交由 listpack 数据结构来实现了。
+    * 使用跳表而不是红黑树：区间查找方便（定位起点，挨个向后遍历
+    * 使用跳表而不是二叉树
+      * skiplist 更省内存：25% 概率的随机层数，可通过公式计算出 skiplist 平均每个节点的指针数是 1.33 个，平衡二叉树每个节点指针是 2 个（左右子树） - skiplist 遍历更友好
+      * skiplist 找到大于目标元素后，向后遍历链表即可，平衡树需要通过中序遍历方式来完成，实现也略复杂
+    * Sorted Set 既可以使用跳表支持数据的范围查询，还能使用哈希表支持根据元素直接查询它的权重
+    * zskiplist不足：内存
+    * 如果有序集合的元素个数小于 `128` 个，并且每个元素的值小于 `64` 字节时，Redis 会使用**压缩列表**作为 Zset 类型的底层数据结构；
+    * 在 Redis 7.0 中，Zset不再由压缩列表实现，转而交由 listpack 数据结构来实现。
 
 
   ![截屏2022-07-20 下午8.44.49](/Users/benz/project/review/截屏2022-07-20 下午8.44.49.png)
 
   * SDS：simple dynamic string
+    
+    ```c
+    typedef char *sds;
+    
+    struct __attribute__ ((__packed__)) sdshdr8 {
+        uint8_t len; /* used */
+        uint8_t alloc; /* excluding the header and null terminator */
+        unsigned char flags; /* 3 lsb of type, 5 unused bits */
+        char buf[];
+    };
+    /* 类似有sdshdr16 */
+    ```
+    
+    ![截屏2022-07-24 下午9.37.52](截屏2022-07-24 下午9.37.52.png)
+    
     * 嵌入式字符串
       * Redis 规定嵌入式字符串最大以 64 字节存储
       * 在目前的x86体系下，一般的缓存行大小是64字节，redis为了一次能加载完成，因此采用64自己作为embstr类型(保存redisObject)的最大长度。
+    
+    ```c
+    robj *createStringObject(const char *ptr, size_t len) {
+        if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
+            return createEmbeddedStringObject(ptr,len);
+        else
+            return createRawStringObject(ptr,len);
+    }
+    
+    // rawString
+    robj *createRawStringObject(const char *ptr, size_t len) {
+        return createObject(OBJ_STRING, sdsnewlen(ptr,len));
+    }
+    
+    robj *createObject(int type, void *ptr) {
+        //给redisObject结构体分配空间
+        robj *o = zmalloc(sizeof(*o));
+        //设置redisObject的类型
+        o->type = type;
+        //设置redisObject的编码类型，此处是OBJ_ENCODING_RAW，表示常规的SDS
+        o->encoding = OBJ_ENCODING_RAW;
+        //直接将传入的指针赋值给redisObject中的指针。
+        o->ptr = ptr;
+        o->refcount = 1;
+        …
+        return o;
+    }
+    
+    // embeddedString
+    robj *createEmbeddedStringObject(const char *ptr, size_t len) {
+      	// redisObject的size + sdshdr8的size + 字符串长度 + 1（末尾'\0'）
+        robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr8)+len+1);
+        ...
+    }
+    ```
 
 
   ![截屏2022-07-20 下午6.55.46](截屏2022-07-20 下午6.55.46.png)
@@ -633,9 +767,10 @@
     ![截屏2022-07-20 下午8.02.07](截屏2022-07-20 下午8.02.07.png)
 
     * 针对不同长度的数据，使用不同大小的元数据信息（prevlen 和 encoding），这种方法可以有效地节省内存开销
-    * prelen和encoding帮助遍历（因为各个元素长度不一样）
-    * 优点：内存紧凑布局
-    * 缺点：查找复杂度高、潜在的**连锁更新**风险
+    * 连续内存存储：每个元素紧凑排列，内存利用率高 
+    *  变长编码：存储数据时，采用变长编码（满足数据长度的前提下，尽可能少分配内存） 
+    * 寻找元素需遍历：存放太多元素，性能会下降（适合少量数据存储） 
+    *  级联更新：更新、删除元素，会引发级联更新（因为内存连续，前面数据膨胀/删除了，后面要跟着一起动）
 
   * listpack
 
@@ -653,6 +788,79 @@
         * 最高位为 1，表示 entry-len 还没有结束，当前字节的左边字节仍然表示 entry-len 的内容；
         * 最高位为 0，表示当前字节已经是 entry-len 最后一个字节了
 
+  * hash
+
+    ```c
+    // hash table
+    typedef struct dictht {
+        dictEntry **table;
+        unsigned long size;
+        unsigned long sizemask;
+        unsigned long used;
+    } dictht;
+    
+    //union节省内存
+    typedef struct dictEntry {
+        void *key;
+        union {
+            void *val;
+            uint64_t u64;
+            int64_t s64;
+            double d;
+        } v;
+        struct dictEntry *next;
+    } dictEntry;
+    
+    //两个dictht，交替使用，
+    typedef struct dict {
+        dictType *type;
+        void *privdata;
+        dictht ht[2];
+        long rehashidx; /* rehashing not in progress if rehashidx == -1 */
+        unsigned long iterators; /* number of iterators currently running */
+    } dict;
+    ```
+
+    * 什么时候触发 rehash
+
+    ```c
+    //如果Hash表为空，将Hash表扩为初始大小
+    if (d->ht[0].size == 0) 
+       return dictExpand(d, DICT_HT_INITIAL_SIZE);
+     
+    //如果Hash表承载的元素个数超过其当前大小，并且可以进行扩容，或者Hash表承载的元素个数已是当前大小的5倍
+    if (d->ht[0].used >= d->ht[0].size &&(dict_can_resize ||
+                  d->ht[0].used/d->ht[0].size > dict_force_resize_ratio))
+    {
+        return dictExpand(d, d->ht[0].used*2);
+    }
+    
+    
+    void dictEnableResize(void) {
+        dict_can_resize = 1;
+    }
+     
+    void dictDisableResize(void) {
+        dict_can_resize = 0;
+    }
+    
+    // 启用扩容功能的条件是：当前没有 RDB 子进程，并且也没有 AOF 子进程
+    // RDB 子进程和 AOF 子进程将主进程数据页设为只读，此时rehash进一步增加内存的压力，因此错开时间
+    void updateDictResizePolicy(void) {
+        if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
+            dictEnableResize();
+        else
+            dictDisableResize();
+    }
+    ```
+
+    * rehash过程
+      * dictAddRaw，dictGenericDelete，dictFind，dictGetRandomKey，dictGetSomeKeys都是针对当前dict判断其是否存在rehash，每次迁移一个桶，不判断其他对象
+      * 定期rehash
+        * 只会迁移全局哈希表中的数据，不会定时迁移 Hash/Set/Sorted Set 下的哈希表的数据，这些哈希表只会在操作数据时做实时的渐进式 rehash
+
+    ![截屏2022-07-24 下午10.53.21](截屏2022-07-24 下午10.53.21.png)
+
 * 单线程
 
   * **「接收客户端请求->解析请求 ->进行数据读写等操作->发生数据给客户端」这个过程是由一个线程（主线程）来完成的**
@@ -662,6 +870,7 @@
     * **避免了多线程之间的竞争**
     *  **I/O 多路复用机制**
     * **CPU 并不是制约 Redis 性能表现的瓶颈所在**
+
 * 持久化
 
   * AOF
@@ -678,12 +887,14 @@
     * 全量快照
   * 混合持久化
     * AOF 重写日志时，重写子进程以RDB写入，重写缓冲区里的增量命令会以 AOF 方式写入
+
 * 主从复制
 
   * 异步
   * 第一次RDB全量，后续通过offset增量复制
   * replication buffer：基于长连接的命令传播，主从通信buffer
   * repl_backlog_buffer：一个「**环形**」缓冲区，用于主从服务器断连后，从中找到差异的数据
+
 * 哨兵
 
   * KeepAlive
@@ -692,14 +903,17 @@
   * 选出新master，主从故障转移
   * 通知客户的主节点已更换
   * 发布者/订阅者模式
+
 * 切片集群
 
   * 缓存量过大，单机内存无法承担
   * 哈希槽
+
 * 脑裂
 
   * 主节点正常运行，哨兵错误判断其下线，重新选主，使集群中出现两个master节点===> 原master节点被降级为servant节点，数据清空，接收rdb全量同步，导致数据丢失
   * 主节点禁止写策略
+
 * 过期删除策略
 
   * 惰性删除
@@ -709,11 +923,13 @@
   * **从库对过期的处理是被动的**
     * 从库不做过期扫描，其过期键处理依靠主服务器控制，**主库在 key 到期时，会在 AOF 文件里增加一条 del 指令，同步到所有的从库**
     * 原因是从库不写的原则，避免主从同步混乱
+
 * 内存淘汰策略
 
   * LRU
     * **随机采样的方式来淘汰数据**，它是随机取 若干值，然后**淘汰最久没有使用的那个**。
   * LFU
+
 * 缓存设计
 
   * 缓存雪崩
@@ -728,6 +944,7 @@
     * 非法请求的限制
     * 设置空值或者默认值
     * 使用布隆过滤器快速判断
+
 * 缓存更新策略
 
   * Cache Aside（旁路缓存）策略
@@ -738,6 +955,7 @@
   * Write Back（写回）策略
     * 内存和磁盘
     * Write Back（写回）策略在更新数据的时候，只更新缓存，同时将缓存数据设置为脏的，然后立马返回，并不会更新数据库。对于数据库的更新，会通过批量异步更新的方式进行。
+
 * 大key影响
 
   * 操作阻塞主线程
@@ -746,8 +964,11 @@
   * 解决：
     * 业务切片，高频操作再做缓存
     * 删除：sscan批量删除、异步删除
+
 * 管道pipeline：批处理
+
 * 回滚能力：无
+
 * 分布式锁
 
   * 第一步是，客户端获取当前时间（t1）。
@@ -762,6 +983,7 @@
   * 缺点：**超时时间不好设置**
 
     * 续约
+
 * 项目：直播流热度统计
   * 使用zset
     * key：streamID
@@ -836,6 +1058,27 @@
 
   * 容器 Volume 里的信息，并不会被 docker commit 提交掉
     * 由于启用mount namespace之后才挂载，宿主机在可读写层是看不到挂载目录的
+
+### 消息队列
+
+* 异步处理、流量控制和服务解耦
+
+* 发布 - 订阅模型：应对一个消息多个消费的场景
+
+* RocketMQ
+
+  * 一个topic存在多个队列，在生产者生产消息的时候可以指定把消息放到哪个队列。 
+
+  * 消费者有一个消费组的概念，消费组里面有多个消费者，可以同时消费多个队列，比如消费组1里面有consumer A，consumer B两个消费者，那么A，B两个消费者可以同时消费一个队列，也可以消费多个队列，组内是竞争关系，A消费了某个消息，B就不能再消费这条消息，与此同时，这个队列上的offset（对于消费组1的offset）会往后移动。消费组2还是有自己的offset，对于同一个队列，每个消费组之间是共享关系，这样就不用存多份数据，只需维护每个消费组在队列上的offerset就好。 
+
+  * 如何顺序消费，可以根据对应的比如用户ID/订单ID，通过一致性hash把相应的数据生产到对应的队列，然后消费这个队列就OK，每个消费组肯定是顺序消费的，队列可以保证顺序消费
+  * 队列的存在实现了多实例并行生产和消费
+  * 每队列每消费组维护一个消费位置（offset），记录这个消费组在这个队列上消费到哪儿了。
+
+![截屏2022-07-22 下午6.16.18](截屏2022-07-22 下午6.16.18.png)
+
+* Kafka
+  * 概念同RocketMQ：唯一需要注意的是在Kafka中队列（queue）被称为分区（partition）
 
 ### K8S
 
@@ -1028,6 +1271,14 @@ docker --> pod --> deployment --> service, secret,job,daemonset,cronjob
   * 服务发现后的节点保护
     * 主动健康检查
   * 节点染色
+
+### 秒杀
+
+* redis分担读请求并监听监听
+* mysql批处理
+* 消息队列异步、削峰
+  * app <-----> 网关 ----> mq（容量限制） ----->秒杀服务
+  * 超时的请求可以直接丢弃
 
 ### 项目
 
