@@ -396,10 +396,20 @@
     * 问题：tcp的某个包的丢失可能导致所有的 HTTP 请求都必须等 待这个丢了的包被重传回来。
   * 2 --> 3
     * Tcp --> udp 解决**传输层的队头阻塞**问题
+* HTTP VS RPC
+  * 纯裸TCP是能收发数据，但它是个**无边界**的数据流，上层需要定义**消息格式**用于定义**消息边界**。于是就有了各种协议，HTTP和各类RPC协议就是在TCP之上定义的应用层协议。
+  * **RPC本质上不算是协议，而是一种调用方式**，而像gRPC和thrift这样的具体实现，才是协议，它们是实现了RPC调用的协议。目的是希望程序员能像调用本地方法那样去调用远端的服务方法。同时RPC有很多种实现方式，**不一定非得基于TCP协议**。
+  * 从发展历史来说，**HTTP主要用于b/s架构，而RPC更多用于c/s架构。但现在其实已经没分那么清了，b/s和c/s在慢慢融合。**很多软件同时支持多端，所以对外一般用HTTP协议，而内部集群的微服务之间则采用RPC协议进行通讯。
+  * RPC其实比HTTP出现的要早，且比目前主流的HTTP1.1**性能**要更好，所以大部分公司内部都还在使用RPC。
+  * **HTTP2.0**在**HTTP1.1**的基础上做了优化，性能可能比很多RPC协议都要好，但由于是这几年才出来的，所以也不太可能取代掉RPC。
+  
 
 #### TCP
 
+* TCP是有三个特点，**面向连接**、**可靠**、基于**字节流**。
+  
 * TCP 和 UDP 区别： 
+  
   * 连接 
     * TCP 是⾯向连接的传输层协议，传输数据前先要建⽴连接。 
     * UDP 是不需要连接，即刻传输数据。
@@ -418,7 +428,7 @@
   * 分⽚不同
     *  TCP 的数据⼤⼩如果⼤于 MSS ⼤⼩，则会在传输层进⾏分⽚，⽬标主机收到后，也同样在传输层组装 TCP 数据包，如果中途丢失了⼀个分⽚，只需要传输丢失的这个分⽚。 
     * UDP 的数据⼤⼩如果⼤于 MTU ⼤⼩，则会在 IP 层进⾏分⽚，⽬标主机收到后，在 IP 层组装完数据，接着 再传给传输层，但是如果中途丢了⼀个分⽚，在实现可靠传输的 UDP 时则就需要重传所有的数据包，这样 传输效率⾮常差，所以通常 UDP 的报⽂应该⼩于 MTU。
-
+  
 * 重传机制
 
   * 超时重传
@@ -550,6 +560,12 @@
 
   * 开启了这个内核参数后，客户端调用 connect  函数时，如果选择到的端口，已经被相同四元组的连接占用的时候，就会判断该连接是否处于  TIME_WAIT 状态，如果该连接处于 TIME_WAIT 状态并且 TIME_WAIT 状态持续的时间超过了 1 秒，那么就会重用这个连接，然后就可以正常使用该端口了。
 
+* 服务端只bind了ip和端口，没有调用listen，此时客户端向这个服务端socket发送数据，会发生什么
+
+  * **客户端对服务端发起 SYN 报文后，服务端回了 RST 报文**
+
+  * RST 报文：**因某种原因引起出现的错误连接，也用来拒绝非法数据和请求**
+
 
 #### IP
 
@@ -602,6 +618,12 @@
 
 * 数据结构  https://time.geekbang.org/column/intro/100084301
 
+  * 全局hash
+  
+  ![截屏2022-07-28 下午4.00.51](截屏2022-07-28 下午4.00.51.png)
+  
+  
+  
   * redisObject
   
   ```c
@@ -645,7 +667,6 @@
     ```
   
     * 跳表在创建结点时，随机生成每个结点的层数
-    * 如果有序集合的元素不满足上面的条件，Redis 会使用**跳表**作为 Zset 类型的底层数据结构；
     * 使用跳表而不是红黑树：区间查找方便（定位起点，挨个向后遍历
     * 使用跳表而不是二叉树
       * skiplist 更省内存：25% 概率的随机层数，可通过公式计算出 skiplist 平均每个节点的指针数是 1.33 个，平衡二叉树每个节点指针是 2 个（左右子树） - skiplist 遍历更友好
@@ -653,10 +674,11 @@
     * Sorted Set 既可以使用跳表支持数据的范围查询，还能使用哈希表支持根据元素直接查询它的权重
     * zskiplist不足：内存
     * 如果有序集合的元素个数小于 `128` 个，并且每个元素的值小于 `64` 字节时，Redis 会使用**压缩列表**作为 Zset 类型的底层数据结构；
+    * 如果有序集合的元素不满足上面的条件，Redis 会使用**跳表**作为 Zset 类型的底层数据结构；
     * 在 Redis 7.0 中，Zset不再由压缩列表实现，转而交由 listpack 数据结构来实现。
 
 
-  ![截屏2022-07-20 下午8.44.49](/Users/benz/project/review/截屏2022-07-20 下午8.44.49.png)
+  ![截屏2022-07-20 下午8.44.49](截屏2022-07-20 下午8.44.49.png)
 
   * SDS：simple dynamic string
     
@@ -774,11 +796,13 @@
 
   * listpack
 
+    
+
     * 用一块连续的内存空间来紧凑地保存数据，同时为了节省内存空间，listpack 列表项使用了多种编码方式，来表示不同长度的数据，这些数据包括整数和字符串
 
     ![截屏2022-07-20 下午8.15.23](截屏2022-07-20 下午8.15.23.png)
 
-    ![截屏2022-07-20 下午8.18.26](/Users/benz/project/review/截屏2022-07-20 下午8.18.26.png)
+    ![截屏2022-07-20 下午8.18.26](截屏2022-07-20 下午8.18.26.png)
 
     * 列表项避免连锁更新：**不会记录前一项的长度信息**
     * 支持正向遍历
@@ -861,15 +885,275 @@
 
     ![截屏2022-07-24 下午10.53.21](截屏2022-07-24 下午10.53.21.png)
 
+  * redis启动
+
+    * 默认配置，配置文件配置、启动参数配置
+    * initServer：完成各项初始化工作
+    * eventloop
+
+  * EventLoop
+
+    * select VS poll VS epoll
+
+    ![截屏2022-07-25 下午4.19.41](截屏2022-07-25 下午4.19.41.png)
+
+    * epoll
+
+    ```c
+    int sock_fd,conn_fd; //监听套接字和已连接套接字的变量
+    sock_fd = socket() //创建套接字
+    bind(sock_fd)   //绑定套接字
+    listen(sock_fd) //在套接字上进行监听，将套接字转为监听套接字
+        
+    epfd = epoll_create(EPOLL_SIZE); //创建epoll实例，
+    //创建epoll_event结构体数组，保存套接字对应文件描述符和监听事件类型    
+    ep_events = (epoll_event*)malloc(sizeof(epoll_event) * EPOLL_SIZE);
+    
+    //创建epoll_event变量
+    struct epoll_event ee
+    //监听读事件
+    ee.events = EPOLLIN;
+    //监听的文件描述符是刚创建的监听套接字
+    ee.data.fd = sock_fd;
+    
+    //将监听套接字加入到监听列表中    
+    epoll_ctl(epfd, EPOLL_CTL_ADD, sock_fd, &ee); 
+        
+    while (1) {
+       //等待返回已经就绪的描述符 
+       n = epoll_wait(epfd, ep_events, EPOLL_SIZE, -1); 
+       //遍历所有就绪的描述符     
+       for (int i = 0; i < n; i++) {
+           //如果是监听套接字描述符就绪，表明有一个新客户端连接到来 
+           if (ep_events[i].data.fd == sock_fd) { 
+              conn_fd = accept(sock_fd); //调用accept()建立连接
+              ee.events = EPOLLIN;  
+              ee.data.fd = conn_fd;
+              //添加对新创建的已连接套接字描述符的监听，监听后续在已连接套接字上的读事件      
+              epoll_ctl(epfd, EPOLL_CTL_ADD, conn_fd, &ee); 
+                    
+           } else { //如果是已连接套接字描述符就绪，则可以读数据
+               ...//读取数据并处理
+           }
+       }
+    }
+    ```
+
+* Recator模型
+
+  * Reactor 模型的基本工作机制
+    * 客户端的不同类请求会在服务器端触发连接、读、写三类事件，这三类事件的监听、分发和处理又是由 reactor、acceptor、handler 三类角色来完成的，然后这三类角色会通过事件驱动框架来实现交互和事件处理。
+  * 单线程Reactor模式
+  * 多线程Reactor模式
+  * 主从Reactor模式
+  * http://gee.cs.oswego.edu/dl/cpjslides/nio.pdf
+
+  ![截屏2022-07-25 下午4.22.45](截屏2022-07-25 下午4.22.45.png)
+
+* 事件驱动（Eventloop）
+
+  * 事件类型及其数据结构
+
+    * IO事件
+      * 分类：可读事件、可写事件、屏障事件
+      * IO事件创建：aeCreateFileEvent
+      * 连接请求（读事件）
+        * acceptTcpHandler（initServer中注册的监听事件）
+        * 注意：从客户端来的都是可读事件（因为需要解析请求并处理）
+      * 输出缓冲区未完全写回（写事件）
+        * sendReplyToClient
+
+    ```c
+    typedef struct aeFileEvent {
+        int mask; /* 事件类型掩码 one of AE_(READABLE|WRITABLE|BARRIER) */
+        aeFileProc *rfileProc; /* READABLE事件处理函数 */
+        aeFileProc *wfileProc; /* WRITABLE事件处理函数 */
+        void *clientData;
+    } aeFileEvent;
+    ```
+
+    * 时间事件
+      * 时间事件的触发处理
+        * 事件驱动框架的 aeMain 函数会循环调用 aeProcessEvents 函数，来处理各种事件。而 aeProcessEvents 函数在执行流程的最后，会调用 processTimeEvents 函数处理相应到时的任务。
+        * proecessTimeEvent：从时间事件链表上逐一取出每一个事件，然后根据当前时间判断该事件的触发时间戳是否已满足。如果已满足，那么就调用该事件对应的回调函数进行处理。
+
+    ```c
+    typedef struct aeTimeEvent {
+        long long id; //时间事件ID
+        long when_sec; //事件到达的秒级时间戳
+        long when_ms; //事件到达的毫秒级时间戳
+        aeTimeProc *timeProc; //时间事件触发后的处理函数
+        aeEventFinalizerProc *finalizerProc;  //事件结束后的处理函数
+        void *clientData; //事件相关的私有数据
+        struct aeTimeEvent *prev;  //时间事件链表的前向指针
+        struct aeTimeEvent *next;  //时间事件链表的后向指针
+    } aeTimeEvent;
+    ```
+
+  * 相关逻辑
+
+    ```c
+    // aeMain: eventloop
+    void aeMain(aeEventLoop *eventLoop) {
+        eventLoop->stop = 0;
+        while (!eventLoop->stop) {
+            if (eventLoop->beforesleep != NULL)
+                eventLoop->beforesleep(eventLoop);
+            aeProcessEvents(eventLoop, AE_ALL_EVENTS|AE_CALL_AFTER_SLEEP);
+        }
+    }
+    
+    // aeProcessEvents: 通过epoll，进行事件捕获，通过注册的回调，进行事件处理
+    int aeProcessEvents(aeEventLoop *eventLoop, int flags)
+    {
+        int processed = 0, numevents;
+     
+        /* 若没有事件处理，则立刻返回*/
+        if (!(flags & AE_TIME_EVENTS) && !(flags & AE_FILE_EVENTS)) return 0;
+        /*如果有IO事件发生，或者紧急的时间事件发生，则开始处理*/
+        if (eventLoop->maxfd != -1 || ((flags & AE_TIME_EVENTS) && !(flags & AE_DONT_WAIT))) {
+           ... 
+           //调用aeApiPoll函数捕获事件 
+           numevents = aeApiPoll(eventLoop, tvp);
+           ...
+        }
+        /* 检查是否有时间事件，若有，则调用processTimeEvents函数处理 */
+        if (flags & AE_TIME_EVENTS)
+            processed += processTimeEvents(eventLoop);
+        /* 返回已经处理的文件或时间*/
+        return processed; 
+    }
+    
+    // aeCreateFileEvent: 注册事件
+    int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
+            aeFileProc *proc, void *clientData)
+    {
+      	...
+        aeApiAddEvent(eventLoop, fd, mask)
+        ...
+    }
+    
+    // 在初始化server的时候，注册监听事件 acceptTcpHandler
+    void initServer(void) {
+        …
+        for (j = 0; j < server.ipfd_count; j++) {
+            if (aeCreateFileEvent(server.el, server.ipfd[j], AE_READABLE,
+                acceptTcpHandler,NULL) == AE_ERR)
+                {
+                    serverPanic("Unrecoverable error creating server.ipfd file event.");
+                }
+      }
+      …
+    }
+    
+    // acceptTcpHandler
+    void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
+      	...
+        acceptCommonHandler(cfd,0,cip);
+      	...
+    }
+    
+    // acceptCommonHandler ---> createClient ---> aeCreateFileEvent
+    client *createClient(int fd) {
+      aeCreateFileEvent(server.el,fd,AE_READABLE,readQueryFromClient, c)
+    }
+    ```
+
+    
+
 * 单线程
 
+  * 以守护进程的方式运行
+
+    ```c
+    void daemonize(void) {
+        int fd;
+    
+        if (fork() != 0) exit(0); /* parent exits */
+      	// 让进程摆脱原会话的控制、让进程摆脱原进程组的控制和让进程摆脱原控制终端的控制
+        setsid(); /* create a new session */
+    
+        /* Every output goes to /dev/null. If Redis is daemonized but
+         * the 'logfile' is set to 'stdout' in the configuration file
+         * it will not log at all. */
+        if ((fd = open("/dev/null", O_RDWR, 0)) != -1) {
+            dup2(fd, STDIN_FILENO);
+            dup2(fd, STDOUT_FILENO);
+            dup2(fd, STDERR_FILENO);
+            if (fd > STDERR_FILENO) close(fd);
+        }
+    }
+    ```
+
+    
   * **「接收客户端请求->解析请求 ->进行数据读写等操作->发生数据给客户端」这个过程是由一个线程（主线程）来完成的**
-  * 日志、主从、哨兵、异步删除过期键：非主线程
+  * Redis 还启动了 3 个线程来执行**文件关闭**、**AOF 同步写**和**惰性删除**等操作
+
+    * 主线程和三个线程之间是生产者-消费者模型
+
+    ```c
+    // 消费线程 (while(1)轮询,不断从list中拿取任务)
+    void *bioProcessBackgroundJobs(void *arg) {
+        while(1) {
+            listNode *ln;
+    
+            /* The loop always starts with the lock hold. */
+            if (listLength(bio_jobs[type]) == 0) {
+                pthread_cond_wait(&bio_newjob_cond[type],&bio_mutex[type]);
+                continue;
+            }
+            /* Pop the job from the queue. */
+            ln = listFirst(bio_jobs[type]);
+            job = ln->value;
+            /* It is now possible to unlock the background system as we know have
+             * a stand alone job structure to process.*/
+            pthread_mutex_unlock(&bio_mutex[type]);
+    
+            /* Process the job accordingly to its type. */
+            if (type == BIO_CLOSE_FILE) {
+                close((long)job->arg1);
+            } else if (type == BIO_AOF_FSYNC) {
+                redis_fsync((long)job->arg1);
+            } else if (type == BIO_LAZY_FREE) {
+                /* What we free changes depending on what arguments are set:
+                 * arg1 -> free the object at pointer.
+                 * arg2 & arg3 -> free two dictionaries (a Redis DB).
+                 * only arg3 -> free the skiplist. */
+                if (job->arg1)
+                    lazyfreeFreeObjectFromBioThread(job->arg1);
+                else if (job->arg2 && job->arg3)
+                    lazyfreeFreeDatabaseFromBioThread(job->arg2,job->arg3);
+                else if (job->arg3)
+                    lazyfreeFreeSlotsMapFromBioThread(job->arg3);
+            } else {
+                serverPanic("Wrong job type in bioProcessBackgroundJobs().");
+            }
+        }
+    }
+    
+    // 生产函数（往对应任务队列中add任务）
+    void bioCreateBackgroundJob(int type, void *arg1, void *arg2, void *arg3){
+        //创建新的任务
+        struct bio_job *job = zmalloc(sizeof(*job));
+        //设置任务数据结构中的参数
+        job->time = time(NULL);
+        job->arg1 = arg1;
+        job->arg2 = arg2;
+        job->arg3 = arg3;
+        pthread_mutex_lock(&bio_mutex[type]);
+        listAddNodeTail(bio_jobs[type],job);  //将任务加到bio_jobs数组的对应任务列表中
+        bio_pending[type]++; //将对应任务列表上等待处理的任务个数加1
+        pthread_cond_signal(&bio_newjob_cond[type]);
+        pthread_mutex_unlock(&bio_mutex[type]);
+    }
+    ```
   * 高并发原因、单线程原因
     * 大部分操作**都在内存中完成**
     * **避免了多线程之间的竞争**
     *  **I/O 多路复用机制**
     * **CPU 并不是制约 Redis 性能表现的瓶颈所在**
+
+  * Redis 6.0之后使用多 IO 线程
 
 * 持久化
 
@@ -877,16 +1161,80 @@
     * 写后日志
       * **避免额外的检查开销**
       * **数据可能会丢失**
-    * 持久化策略：always、everysec、no
+      
+    * 持久化策略
+    
+      * always：主线程同步fsync
+      * everysec：后台线程每间隔1秒fsync
+      * no：由OS完成fsync
+    
     * AOF重写
+    
+      ![6b054eb1aed0734bd81ddab9a31d0be8](6b054eb1aed0734bd81ddab9a31d0be8.webp)
+    
       * 由后台子进程 bgrewriteaof 来完成的
+    
       * AOF重写缓冲区
-        * 解决主进程接受写操作导致与子进程 bgrewriteaof 数据不一致
-
+        
+        * 管道(pipe)：单向通信
+        
+        ```c
+        int main() 
+        { 
+            int fd[2], nr = 0, nw = 0; 
+            char buf[128]; 
+            pipe(fd); 
+            pid = fork(); 
+             
+          if(pid == 0) {
+              //子进程调用read从fd[0]描述符中读取数据
+                printf("child process wait for message\n"); 
+                nr = read(fds[0], buf, sizeof(buf)) 
+                printf("child process receive %s\n", buf);
+          }else{ 
+               //父进程调用write往fd[1]描述符中写入数据
+                printf("parent process send message\n"); 
+                strcpy(buf, "Hello from parent"); 
+                nw = write(fd[1], buf, sizeof(buf)); 
+                printf("parent process send %d bytes to child.\n", nw); 
+            } 
+            return 0; 
+        } 
+        ```
+        
+      * AOF 重写是在子进程中执行，但在此期间父进程还会接收写操作，为了保证新的 AOF 文件数据更完整，所以父进程需要把在这期间的写操作缓存下来，然后发给子进程，让子进程追加到 AOF 文件中 
+    
+        * 如果完全交由父进程完成，则会阻塞其余请求的相应
+    
+      * 因为需要父子进程传输数据，所以需要用到操作系统提供的进程间通信机制，这里 Redis 用的是「管道」，管道只能是一个进程写，另一个进程读，特点是单向传输 
+    
+      * AOF 重写时，父子进程用了 3 个管道，分别传输不同类别的数据：
+    
+        *  父进程传输数据给子进程的管道：发送 AOF 重写期间新的写操作
+        * 子进程完成重写后通知父进程的管道：让父进程停止发送新的写操作
+        *  父进程确认收到子进程通知的管道：父进程通知子进程已收到通知
+    
+      *  AOF 重写的完整流程是：父进程 fork 出子进程，子进程迭代实例所有数据，写到一个临时 AOF 文件，在写文件期间，父进程收到新的写操作，会先缓存到 buf 中，之后父进程把 buf 中的数据，通过管道发给子进程，子进程写完 AOF 文件后，会从管道中读取这些命令，再追加到 AOF 文件中，最后 rename 这个临时 AOF 文件为新文件，替换旧的 AOF 文件，重写结束
+    
+    * 子进程收到父进程回复的ack时管道内还有数据怎么处理？
+    
+      * 父进程收到子进程ack后设置server.aof_stop_sending_diff为1，然后回复ack 子进程收到ack时会再次调用aofReadDiffFromParent尝试把管道里可能存在的数据都读出来 最后一步将aof_child_diff的内容写入文件，并将文件名rename为temp-rewriteaof-bg-pid.aof 父进程在serverCron中调用wait3来确认重写子进程执行结果，读取子进程重写的aof文件，在文件末尾再次写入子进程执行结束后父进程积累的数据，最后将文件名重命名成最终文件
+    
   * RDB
+    
     * 全量快照
+    * 持久化文件体积小（二进制 + 压缩）
+    * 写盘频率低（定时写入）
+    
   * 混合持久化
     * AOF 重写日志时，重写子进程以RDB写入，重写缓冲区里的增量命令会以 AOF 方式写入
+
+  * Redis 源码中在有 RDB 子进程运行时，不会启动 AOF 重写子进程
+
+    * 无论是生成 RDB 还是 AOF 重写，都需要创建子进程，然后把实例中的所有数据写到磁盘上，这个过程中涉及到两块
+      * CPU：写盘之前需要先迭代实例中的所有数据，在这期间会耗费比较多的 CPU 资源，两者同时进行，CPU 资源消耗大
+      * 磁盘：同样地，RDB 和 AOF 重写，都是把内存数据落盘，在这期间 Redis 会持续写磁盘，如果同时进行，磁盘 IO 压力也会较大
+    * 整体来说都是为了资源考虑，所以不会让它们同时进行。
 
 * 主从复制
 
@@ -908,6 +1256,15 @@
 
   * 缓存量过大，单机内存无法承担
   * 哈希槽
+  * 路由
+    * 客户端路由：Redis Cluster 
+      * Redis Cluster 无需部署哨兵集群，集群内 Redis 节点通过 Gossip 协议互相探测健康状态，在故障时可发起自动切换。
+    * proxy ：Codis
+  * redis cluster
+    * 实例之间可以通过相互传递消息，获得最新的哈希槽分配信息，但是，客户端是无法主动感知这些变化的。这就会导致，它缓存的分配信息和最新的分配信息不一致
+    * 解决：重定向机制
+      * 当客户端把一个键值对的操作请求发给一个实例时，如果这个实例上并没有这个键值对映射的哈希槽，那么，这个实例就会给客户端返回下面的 MOVED 命令响应结果，这个结果中就包含了新实例的访问地址。
+      * hash槽部分迁移时，客户端就会收到一条 ASK 报错信息；旧的Redis实例返回ASK错误，说明要查找的key不在旧Redis实例上，在新的Redis实例上(已经迁移过去了)。但是槽位没有迁移完成，在新的Redis实例上不会管理这个槽位。如果直接从新实例上获取，就会返回-MOVED错误。ASK指令的目标就是打开新实例的选项，告诉它下一条指令不能不理，而要当成自己的槽位来处理。
 
 * 脑裂
 
@@ -927,8 +1284,90 @@
 * 内存淘汰策略
 
   * LRU
-    * **随机采样的方式来淘汰数据**，它是随机取 若干值，然后**淘汰最久没有使用的那个**。
+
+    * 传统的LRU算法内存和性能都不足够友好
+    * 策略：
+      * allkeys-lru
+      * volatile-lru
+    * **随机采样的方式来淘汰数据**
+      * 首先是设置了全局 LRU 时钟，并在键值对创建时获取全局 LRU 时钟值作为访问时间戳，以及在每次访问时获取全局 LRU 时钟值，更新访问时间戳。
+        * 全局 LRU本质上就是一个缓存，减少系统调用的次数
+      * 使用了固定大小的待淘汰数据集合（EvictionPoolLRU数组），每次随机选择一些 key 加入待淘汰数据集合中。最后，再按照待淘汰集合中 key 的空闲时间长度，删除空闲时间最长的 key。这样一来，Redis 就近似实现了 LRU 算法的效果了。
+
   * LFU
+
+    * 策略：
+      * allkeys-lru
+      * volatile-lru
+    * 访问次数按时间衰减
+    * 访问次数按概率增加
+
+  * 同步删除
+
+    第一步：从全局hash表中删除（同步）
+
+    第二步：释放内存空间（同步）
+
+  * 异步删除
+
+    第一步：从全局hash表中删除（同步）
+
+    第二步：释放内存空间（异步）
+
+  * 注意：
+
+    * delete命令是同步删除
+    * unlink命令是异步删除
+    * redis内部内存过载而引发的删除依赖于配置
+
+    ```c
+    void delCommand(client *c) {
+        delGenericCommand(c,0);
+    }
+    
+    void unlinkCommand(client *c) {
+        delGenericCommand(c,1);
+    }
+    
+    /* This command implements DEL and LAZYDEL. */
+    void delGenericCommand(client *c, int lazy) {
+        int numdel = 0, j;
+    
+        for (j = 1; j < c->argc; j++) {
+            expireIfNeeded(c->db,c->argv[j]);
+            int deleted  = lazy ? dbAsyncDelete(c->db,c->argv[j]) :
+                                  dbSyncDelete(c->db,c->argv[j]);
+            if (deleted) {
+                signalModifiedKey(c->db,c->argv[j]);
+                notifyKeyspaceEvent(NOTIFY_GENERIC,
+                    "del",c->argv[j],c->db->id);
+                server.dirty++;
+                numdel++;
+            }
+        }
+        addReplyLongLong(c,numdel);
+    }
+    ```
+
+    
+
+  ```c
+  // 确定删除开销，开销小则仍同步删除
+  //如果要淘汰的键值对包含超过64个元素
+  if (free_effort > LAZYFREE_THRESHOLD && val->refcount == 1) {
+     atomicIncr(lazyfree_objects,1);
+     bioCreateBackgroundJob(BIO_LAZY_FREE,val,NULL,NULL); //创建惰性删除的后台任务，交给后台线程执行
+     dictSetVal(db->dict,de,NULL);  //将被淘汰键值对的value设置为NULL
+  }
+  
+  if (de) {
+     dictFreeUnlinkedEntry(db->dict,de);
+     ...
+     return 1;
+  }
+  ```
+
+  
 
 * 缓存设计
 
@@ -947,14 +1386,26 @@
 
 * 缓存更新策略
 
+  * 只读缓存
+
+    * 只读缓存指读请求会先经过Redis，写操作不会经过Redis，但是会删除相应的数据。当再次读取数据时，会发生缓存缺失，然后从数据库中读取并写入缓存
+    * 延时双删
+    * 过期时间
+
+  * 读写缓存
+
+    * Write Through（读穿 / 写穿）策略
+      * 同时写入缓存Cache和后端存储
+    * Write Back（写回）策略
+      * 内存和磁盘
+      * Write Back（写回）策略在更新数据的时候，只更新缓存，同时将缓存数据设置为脏的，然后立马返回，并不会更新数据库。对于数据库的更新，会通过批量异步更新的方式进行
+
   * Cache Aside（旁路缓存）策略
-    * Redis 和 MySQL 的更新策略
+
+    ![未命名文件 (9)](未命名文件 (9).png)
+
+    * Redis 和 MySQL 的更新策略（区别于内存和磁盘）
     * 应用程序直接与「数据库、缓存」交互，并负责对缓存的维护
-  * Read/Write Through（读穿 / 写穿）策略
-    * 如果缓存中数据已经存在，则更新缓存中的数据，并且由缓存组件同步更新到数据库中，然后缓存组件告知应用程序更新完成。
-  * Write Back（写回）策略
-    * 内存和磁盘
-    * Write Back（写回）策略在更新数据的时候，只更新缓存，同时将缓存数据设置为脏的，然后立马返回，并不会更新数据库。对于数据库的更新，会通过批量异步更新的方式进行。
 
 * 大key影响
 
@@ -1061,7 +1512,7 @@
 
 ### 消息队列
 
-* 异步处理、流量控制和服务解耦
+* **异步处理**、**流量控制**和**服务解耦**
 
 * 发布 - 订阅模型：应对一个消息多个消费的场景
 
@@ -1074,11 +1525,245 @@
   * 如何顺序消费，可以根据对应的比如用户ID/订单ID，通过一致性hash把相应的数据生产到对应的队列，然后消费这个队列就OK，每个消费组肯定是顺序消费的，队列可以保证顺序消费
   * 队列的存在实现了多实例并行生产和消费
   * 每队列每消费组维护一个消费位置（offset），记录这个消费组在这个队列上消费到哪儿了。
+  * **每个队列只能被一个消费者实例占用**
 
 ![截屏2022-07-22 下午6.16.18](截屏2022-07-22 下午6.16.18.png)
 
 * Kafka
+
   * 概念同RocketMQ：唯一需要注意的是在Kafka中队列（queue）被称为分区（partition）
+  * Kafka ：异步批量
+    * 同步收发消息的响应时延比较高，因为当客户端发送一条消息的时候，Kafka 并不会立即发送出去，而是要等一会儿攒一批再发送
+    * **Kafka 不太适合在线业务场景**
+
+* 分布式事务的实现方式
+
+  * 两阶段提交
+  * 事务消息
+
+* 消息队列是如何实现分布式事务
+
+  * 事务消息
+
+  ![截屏2022-07-30 下午3.14.58](截屏2022-07-30 下午3.14.58.png)
+
+  * 首先，订单系统在消息队列上开启一个事务。然后订单系统给消息服务器发送一个“半消息”，这个半消息不是说消息内容不完整，它包含的内容就是完整的消息内容，半消息和普通消息的唯一区别是，**在事务提交之前，对于消费者来说，这个消息是不可见的**。
+
+  * 半消息发送成功后，订单系统就可以执行本地事务了，在订单库中创建一条订单记录，并提交订单库的数据库事务。然后根据本地事务的执行结果决定提交或者回滚事务消息。如果订单创建成功，那就提交事务消息，购物车系统就可以消费到这条消息继续后续的流程。如果订单创建失败，那就回滚事务消息，购物车系统就不会收到这条消息。这样就基本实现了“**要么都成功，要么都失败**”的一致性要求。
+
+  * RocketMQ 中的分布式事务实现
+
+    * 在 RocketMQ 中的事务实现中，增加了**事务反查**的机制来解决事务消息提交失败的问题。如果 Producer 也就是订单系统，在提交或者回滚事务消息时发生网络异常，RocketMQ 的 Broker 没有收到提交或者回滚的请求，Broker 会定期去 Producer 上反查这个事务对应的本地事务的状态，然后根据反查结果决定提交或者回滚这个事务。
+    * 为了支撑这个事务反查机制，我们的业务代码需要实现一个反查本地事务状态的接口，告知 RocketMQ 本地事务是成功还是失败。
+
+    ![11ea249b164b893fb9c36e86ae32577a](11ea249b164b893fb9c36e86ae32577a.webp)
+
+* 是否有消息丢失
+
+  * 分布式链路追踪系统，追踪每一条消息
+  * 利用消息队列的有序性，在 Producer 端，我们给每个发出的消息附加一个连续递增的序号，然后在 Consumer 端来检查这个序号的连续性。
+    * 在发消息的时候必须要指定分区，并且，在每个分区单独检测消息序号的连续性。
+    * Producer 是多实例时，消息序号需要附加上 Producer 的标识，Consumer 端按照每个 Producer 分别来检测序号的连续性。
+    * Consumer 实例的数量最好和分区数量一致，做到 Consumer 和分区一一对应，这样会比较方便地在 Consumer 内检测消息序号的连续性。
+
+* 确保消息可靠传递
+
+  ![81a01f5218614efea2838b0808709205](81a01f5218614efea2838b0808709205.webp)
+
+  * 生产阶段: 在这个阶段，从消息在 Producer 创建出来，经过网络传输发送到 Broker 端。
+
+    * 在生产阶段，需要注意代码中的发送返回
+
+  * 存储阶段: 在这个阶段，消息在 Broker 端存储，如果是集群，消息会在这个阶段被复制到其他的副本上
+
+    * 配置刷盘或复制相关参数
+    * 集群
+
+    ![截屏2022-07-30 下午10.03.42](截屏2022-07-30 下午10.03.42.png)
+
+  * 消费阶段: 在这个阶段，Consumer 从 Broker 上拉取消息，经过网络传输发送到 Consumer 上
+
+    * **在处理完全部消费业务逻辑之后，再发送消费确认**
+
+* mq的服务质量标准
+
+  * At most once: 至多一次。消息在传递时，最多会被送达一次。换一个说法就是，没什么消息可靠性保证，允许丢消息。一般都是一些对消息可靠性要求不太高的监控场景使用，比如每分钟上报一次机房温度数据，可以接受数据少量丢失。
+  * At least once: 至少一次。消息在传递时，至少会被送达一次。也就是说，不允许丢消息，但是允许有少量重复消息出现。
+  * Exactly once：恰好一次。消息在传递时，只会被送达一次，不允许丢失也不允许重复，这个是最高的等级。
+  * 大部分消息队列提供的服务质量都是 At least once，包括 RocketMQ、RabbitMQ 和 Kafka ，即**消息队列无法保证消息不重复**
+
+* mq收到重复消息（consumer消费重复消息）
+
+  * **At least once + 幂等消费 = Exactly once**
+
+  * 做好消费的幂等性
+
+    * 业务处理逻辑本身就是幂等的
+    * 数据库的唯一性约束
+    * 设置前置条件
+
+  * 业务处理逻辑非幂等，那就消息先去重，根据业务ID(标识消息唯一性的就行)，去查询是否消费过此消息了，消费了，则抛弃，否则就消费
+
+    * 全局ID（分布式锁）
+    * 检查消费状态，然后更新数据并且设置消费状态（分布式锁）
+    * 一个partition由一个consumer消费，但是**一个consumer之内需要慎重考虑多线程消费**，可能会导致数据不一致的现象
+
+    > 对于同一条消息：“全局 ID 为 8，操作为：给 ID 为 666 账户增加 100 元”，有可能出现这样的情况：
+    >
+    > t0 时刻：Consumer A 收到条消息，检查消息执行状态，发现消息未处理过，开始执行“账户增加 100 元”；
+    >
+    > t1 时刻：Consumer B 收到条消息，检查消息执行状态，发现消息未处理过，因为这个时刻，Consumer A 还未来得及更新消息执行状态。
+    >
+    > 这样就会导致账户被错误地增加了两次 100 元
+
+* mq使用性能
+
+  * 发送端性能优化
+    * 并发数
+    * 批量大小
+    * 消息体量大，无法发挥批处理的优势，可使用扩容发送方的发送缓冲区、减小消息大小等方式
+  * 消费端性能优化
+    * 保证消费端的消费性能要高于生产端的发送性能，这样的系统才能健康的持续运行
+    * 水平扩容：**在扩容 Consumer 的实例数量的同时，必须同步扩容主题中的分区（也叫队列）数量**，确保 Consumer 的实例数和分区数量是相等的
+    * **同步且非缓存消费的重要性**：如果使用内存队列来缓存mq中的消息，启动多个线程执行业务逻辑，如果收消息的节点发生宕机，在内存队列中还没来及处理的这些消息就会丢失。
+
+* 消息积压
+
+  * producer单位时间内发送的消息增多
+    * 通过扩容消费端的实例数来提升总体的消费能力
+    * 优化消费逻辑
+    * 系统降级
+  * 消费失败导致的一条消息反复消费这种情况比较多
+
+* 消费确认机制
+
+  * 在同一个消费组里面，每个队列只能被一个消费者实例占用
+
+* kafka批量消息
+
+  * kafka在producer、服务 端、consumer中批消息都不会被解开，一直是作为一条“批消息”来进行处理的，consumer 从 Broker 拉到一批消息后，在客户端把批消息解开，再一条一条交给用户代码处理
+
+* kafka零拷贝
+
+  * 零拷贝加速消费过程
+  * 原始
+
+  ![v2-0b46e37f599e0855925a39201add483a_r](v2-0b46e37f599e0855925a39201add483a_r.jpeg)
+
+  ![v2-18e66cbb4e06d1f13e4335898c7b8e8c_r](v2-18e66cbb4e06d1f13e4335898c7b8e8c_r.jpeg)
+
+  * DMA
+
+  ![v2-8894982f1c09259e2959acddc9f095e7_r](v2-8894982f1c09259e2959acddc9f095e7_r.jpeg)
+
+  * 通过**sendfile**系统调用，CPU 利用 **DMA** 控制器直接从 PageCache 中把数据复制到 Socket 缓冲区中，
+
+  ![v2-48132735369375701f3d8ac1d6029c2a_r](v2-48132735369375701f3d8ac1d6029c2a_r.jpeg)
+
+  * sendfile + DMA gather copy，由 DMA 根据内存地址、地址偏移量将数据批量地从读缓冲区（read buffer）拷贝到网卡设备中
+
+  ![v2-15edf2971101883e2a90253225a3b0d3_r](v2-15edf2971101883e2a90253225a3b0d3_r.jpeg)
+
+* kafka数据可靠性
+
+  * 本地只是使用page cache，（没有类似mysql的wal日志
+    * 消息队列它的读写比例大致是 1：1，page cache足够满足需求
+    * Kafka 它并不是只靠磁盘来保证数据的可靠性，它更依赖的是，**在不同节点上的多副本来解决数据可靠性问题**
+
+* 数据压缩
+
+  * producer（数据压缩） ---> 服务端 ----> consumer（数据解压）
+  * 即：Kafka 的压缩和解压都是在客户端完成的
+
+* kafka：Replica
+
+  ![截屏2022-07-31 下午11.02.02](截屏2022-07-31 下午11.02.02.png)
+
+  ![截屏2022-07-30 下午10.03.42](截屏2022-07-30 下午10.03.42.png)
+
+* kakfa：consumer rebalance
+
+  consumer分配partition的方式
+
+  ![image](image.png)
+
+  ![image](image的副本.png)
+
+  ![image(3)](image(3).png)
+
+  ![image (1)](image (1).png)
+
+  ![image (2)](image (2).png)
+
+* RocketMQ：消费重试和死信队列
+
+![未命名文件 (20)](未命名文件 (20).png)
+
+### 序列化
+
+* 序列化后的数据最好是易于人类阅读的；
+* 实现的复杂度是否足够低；
+* 序列化和反序列化的速度越快越好；
+* 序列化后的信息密度越大越好，也就是说，同样的一个结构化数据，序列化之后占用的存储空间越小越好；
+* 为什么不能直接把内存中，对象对应的二进制数据直接通过网络发送出去？
+  * 不通用， 不同系统， 不同语言的组织可能都是不一样的， 而且还存在很多引用， 指针，并不是直接数据块。
+
+### 传输协议
+
+* 使用分隔符
+  * 内部传输分隔符时使用转义符
+* 增加句长字段
+* tcp连接：全双工的通道
+  * 问：双端同时收发数据，会发生消息时序混乱的场景
+    * 给每个请求加一个序号，这个序号在本次会话内保证唯一，然后在响应中带上请求的序号
+    * 双端序列号分离，比如双端一个使用奇数，另一个使用偶数作为序号
+
+### 高并发场景下的OOM和卡死
+
+* 原因
+
+  * 垃圾回收的stop the world
+
+  * 高并发下垃圾回收的不及时
+  * 高并发场景下，短时间内就会创建大量的对象，这些对象将会迅速占满内存，这时候，由于没有内存可以使用了，垃圾回收被迫开始启动，并且，这次被迫执行的垃圾回收面临的是占满整个内存的海量对象，它执行的时间也会比较长，相应的，这个回收过程会导致进程长时间暂停。进程长时间暂停，又会导致大量的请求积压等待处理，垃圾回收刚刚结束，更多的请求立刻涌进来，迅速占满内存，再次被迫执行垃圾回收，进入了一个恶性循环。如果垃圾回收的速度跟不上创建对象的速度，还可能会产生内存溢出的现象。
+
+* 处理方式
+
+  * 优化代码中处理请求的业务逻辑，尽量少的创建一次性对象
+  * 自行回收并重用对象（池化）
+  * 绕开自动垃圾回收机制，自己来实现内存管理
+    * 增加了程序的复杂度
+    * 引起内存泄漏
+
+### 秒杀服务
+
+* 网关
+
+  * 方案一
+
+    * 网关在收到请求后，将请求放入请求消息队列
+
+    * 后端服务从请求消息队列中获取 APP 请求，完成后续秒杀处理过程，然后返回结果。
+
+  * 方案二
+
+    * 预估出秒杀服务的处理能力
+    * 设计令牌桶（消息队列），单位时间内只发放固定数量的令牌到令牌桶中，规定服务在处理请求之前必须先从令牌桶中拿出一个令牌，如果令牌桶中没有令牌，则拒绝请求
+
+* 后端服务器
+
+  * 消息队列异步处理
+
+* 数据库
+
+  * 分库分表
+  * 减轻写操作压力
+    * 中间件实现批处理
+  * 减轻读操作压力
+    * redis分担读请求
+    * redis缓存更新策略
+      * 监听binlog
+      * 定时触发更新
 
 ### K8S
 
@@ -1362,3 +2047,27 @@ Querier interface{
   ```
 
 ![未命名文件 (2)](未命名文件 (2).png)
+
+* 堆
+
+  ```go
+  type IHeap [][2]int
+  
+  func (h IHeap) Len() int           { return len(h) }
+  func (h IHeap) Less(i, j int) bool { return h[i][1] < h[j][1] }
+  func (h IHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+  
+  func (h *IHeap) Push(x interface{}) {
+      *h = append(*h, x.([2]int))
+  }
+  
+  func (h *IHeap) Pop() interface{} {
+      old := *h
+      n := len(old)
+      x := old[n-1]
+      *h = old[0 : n-1]
+      return x
+  }
+  ```
+
+  
